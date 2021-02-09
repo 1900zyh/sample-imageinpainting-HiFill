@@ -1,14 +1,23 @@
 import cv2
 import numpy as np
 import tensorflow as tf
+from tqdm import tqdm 
 import glob 
 import argparse
 import os
 
 
+parser = argparse.ArgumentParser()
+parser.add_argument('--images', type=str, default='/data05/t-yazen/data/places2512')
+parser.add_argument('--masks',  type=str, default='../../../data/mask/mask')
+parser.add_argument('--output_dir', type=str, default='./results')
+parser.add_argument('--level', type=int, default=1)
+parser.add_argument('--multiple', type=int, default=6)
+args = parser.parse_args()
+
+
 INPUT_SIZE = 512  # input image size for Generator
 ATTENTION_SIZE = 32 # size of contextual attention
-
 
 def sort(str_lst):
     return [s for s in sorted(str_lst)]
@@ -113,45 +122,45 @@ def inpaint(raw_img,
 
 def read_imgs_masks(args):
     paths_img = glob.glob(args.images+'/*.*[gG]')
-    paths_mask = glob.glob(args.masks+'/*.*[gG]')
-    paths_img = sort(paths_img)
-    paths_mask = sort(paths_mask)
+    paths_mask = [os.path.join(args.masks, f'{str(i).zfill(5)}.png') for i in range(args.level*2000, (args.level+1)*2000)]
+    paths_img.sort()
     print('#imgs: ' + str(len(paths_img)))
     print('#imgs: ' + str(len(paths_mask)))
-    print(paths_img)
-    print(paths_mask)
     return paths_img, paths_mask
 
-parser = argparse.ArgumentParser()
-args = parser.parse_args()
-args.images = '../samples/testset' # input image directory
-args.masks = '../samples/maskset' # input mask director
-args.output_dir = './results' # output directory
-args.multiple = 6 # multiples of image resizing 
 
 paths_img, paths_mask = read_imgs_masks(args)
+args.output_dir += f'_{args.level}'
 if not os.path.exists(args.output_dir):
     os.makedirs(args.output_dir)
+
 with tf.Graph().as_default():
-  with open('./pb/hifill.pb', "rb") as f:
-    output_graph_def = tf.GraphDef()
-    output_graph_def.ParseFromString(f.read())
-    tf.import_graph_def(output_graph_def, name="")
+    with open('./pb/hifill.pb', "rb") as f:
+        output_graph_def = tf.GraphDef()
+        with tf.device(f'/device:GPU:0'):
+            output_graph_def.ParseFromString(f.read())
+            tf.import_graph_def(output_graph_def, name="")
 
-  with tf.Session() as sess:
-    init = tf.global_variables_initializer()
-    sess.run(init)
-    image_ph = sess.graph.get_tensor_by_name('img:0')
-    mask_ph = sess.graph.get_tensor_by_name('mask:0')
-    inpainted_512_node = sess.graph.get_tensor_by_name('inpainted:0')
-    attention_node = sess.graph.get_tensor_by_name('attention:0')
-    mask_512_node = sess.graph.get_tensor_by_name('mask_processed:0')
+            # config=tf.ConfigProto(log_device_placement=True)
+            with tf.Session() as sess:
+                init = tf.global_variables_initializer()
+                sess.run(init)
+                image_ph = sess.graph.get_tensor_by_name('img:0')
+                mask_ph = sess.graph.get_tensor_by_name('mask:0')
+                inpainted_512_node = sess.graph.get_tensor_by_name('inpainted:0')
+                attention_node = sess.graph.get_tensor_by_name('attention:0')
+                mask_512_node = sess.graph.get_tensor_by_name('mask_processed:0')
 
-    for path_img, path_mask in zip(paths_img, paths_mask):
-        raw_img = cv2.imread(path_img)
-        raw_mask = cv2.imread(path_mask)
-        inpainted = inpaint(raw_img, raw_mask, sess, inpainted_512_node, attention_node, mask_512_node, image_ph, mask_ph, args.multiple)
-        filename = args.output_dir + '/' + os.path.basename(path_img)
-        cv2.imwrite(filename + '_inpainted.jpg', inpainted)
+                for i in tqdm(range(len(paths_img))): 
+                    path_img = paths_img[i]
+                    path_mask = paths_mask[i%len(paths_mask)]
+                    raw_img = cv2.imread(path_img)
+                    raw_mask = cv2.imread(path_mask)
+                    raw_mask = 255-raw_mask
+                    raw_mask = cv2.resize(raw_mask, (512,512), cv2.INTER_NEAREST)
+                    inpainted = inpaint(raw_img, raw_mask, sess, inpainted_512_node, attention_node, mask_512_node, image_ph, mask_ph, args.multiple)
+                    filename = args.output_dir + '/' + os.path.basename(path_img)
+                    cv2.imwrite(filename.split('.jpg')[0] + '_comp.png', inpainted)
+                    cv2.imwrite(filename.split('.jpg')[0] + '_mask.png', raw_mask)
 
 
