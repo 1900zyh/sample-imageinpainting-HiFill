@@ -8,8 +8,8 @@ import os
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--images', type=str, default='/data05/t-yazen/data/places2512')
-parser.add_argument('--masks',  type=str, default='../../../data/mask/mask')
+parser.add_argument('--images', type=str, default='/data05/t-yazen/data/places2/centercrop_512')
+parser.add_argument('--masks',  type=str, default='/data05/t-yazen/data/mask/mask')
 parser.add_argument('--output_dir', type=str, default='./results')
 parser.add_argument('--level', type=int, default=1)
 parser.add_argument('--multiple', type=int, default=6)
@@ -122,8 +122,9 @@ def inpaint(raw_img,
 
 def read_imgs_masks(args):
     paths_img = glob.glob(args.images+'/*.*[gG]')
-    paths_mask = [os.path.join(args.masks, f'{str(i).zfill(5)}.png') for i in range(args.level*2000, (args.level+1)*2000)]
     paths_img.sort()
+    paths_mask = [os.path.join(args.masks, f'{str(i).zfill(5)}.png') for i in range(args.level*2000, (args.level+1)*2000)]
+    paths_mask = paths_mask*(len(paths_img)//len(paths_mask)) + paths_mask[:len(paths_img)%len(paths_mask)]
     print('#imgs: ' + str(len(paths_img)))
     print('#imgs: ' + str(len(paths_mask)))
     return paths_img, paths_mask
@@ -151,16 +152,18 @@ with tf.Graph().as_default():
                 attention_node = sess.graph.get_tensor_by_name('attention:0')
                 mask_512_node = sess.graph.get_tensor_by_name('mask_processed:0')
 
-                for i in tqdm(range(len(paths_img))): 
+                for i in tqdm(range(len(paths_img)), desc=f'hifill'): 
                     path_img = paths_img[i]
-                    path_mask = paths_mask[i%len(paths_mask)]
+                    path_mask = paths_mask[i]
                     raw_img = cv2.imread(path_img)
                     raw_mask = cv2.imread(path_mask)
                     raw_mask = 255-raw_mask
                     raw_mask = cv2.resize(raw_mask, (512,512), cv2.INTER_NEAREST)
                     inpainted = inpaint(raw_img, raw_mask, sess, inpainted_512_node, attention_node, mask_512_node, image_ph, mask_ph, args.multiple)
+                    # raw_mask = np.array(raw_mask<127).astype(np.uint8)
+                    # comp = raw_mask * inpainted + (1 - raw_mask) * raw_img
+                    comp = inpainted
                     filename = args.output_dir + '/' + os.path.basename(path_img)
-                    cv2.imwrite(filename.split('.jpg')[0] + '_comp.png', inpainted)
-                    cv2.imwrite(filename.split('.jpg')[0] + '_mask.png', raw_mask)
+                    cv2.imwrite(filename.split('.jpg')[0] + '.png', comp)
 
 
